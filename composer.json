@@ -1,0 +1,33 @@
+{
+    "name": "phorq/router",
+    "description": "File-based routing for PHP",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["router", "file-based", "php", "middleware", "modules"],
+    "authors": [
+        {
+            "name": "Denny Shimkoski",
+            "email": "denny@cr0w.digital"
+        }
+    ],
+    "require": {
+        "php": ">=8.2"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.0|^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "phorq\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "phorq\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "minimum-stability": "stable"
+}
