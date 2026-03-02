@@ -51,7 +51,7 @@ $ctx = new Context();
 
 $result = $router->route($ctx);
 
-if ($result->ok()) {
+if ($result) {
     echo $result->body;
 } else {
     http_response_code(404);
@@ -102,20 +102,30 @@ The `core` module is special:
 
 ## Context
 
-`Context` holds output wrappers and shared state:
+`Context` is a base class with a public `$wrap` array. The router uses it to apply output transformations chosen by route handlers. Middleware can register wrappers at runtime:
 
 ```php
-$ctx = new Context(
-    wrap: [
-        'json' => function (mixed $data) {
-            header('Content-Type: application/json');
-            return json_encode($data);
-        },
-        'html' => fn(string $s) => "<html><body>{$s}</body></html>",
-    ],
-    state: ['user' => null],
-);
+$ctx->wrap['json'] = function (mixed $data) {
+    header('Content-Type: application/json');
+    return json_encode($data);
+};
+$ctx->wrap['html'] = fn(string $s) => "<html><body>{$s}</body></html>";
 ```
+
+Simple apps can use `Context` directly. For apps with services, extend it:
+
+```php
+class AppContext extends \phorq\Context
+{
+    public function __construct(
+        public Logger $logger,
+        public Cache $cache,
+    ) {}
+}
+```
+
+Middleware and route handlers receive your subclass — with full access to
+your services *and* the inherited `$wrap` array.
 
 Route handlers select a wrapper by returning a single-key array where the key matches a wrap name:
 
@@ -123,7 +133,7 @@ Route handlers select a wrapper by returning a single-key array where the key ma
 <?php // routes/api/data.php
 $data = ['ok' => true, 'user' => 'Alice'];
 return ['json' => $data];
-// → passes $data to $ctx->wrap['json'], which calls json_encode()
+// → passes $data to $ctx->wrap['json']($data)
 ```
 
 ## Middleware

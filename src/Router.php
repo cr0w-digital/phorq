@@ -113,7 +113,7 @@ final class Router
      * @param Context    $ctx  Application context (wrappers, shared state)
      * @param array|null $req  Optional pre-built request array (for testing). When null, buildRequest() is used.
      */
-    public function route(Context $ctx, ?array $req = null): Result
+    public function route(Context $ctx, ?array $req = null): ?Result
     {
         $req    = $req ?? self::buildRequest();
         $method = $req['method'];
@@ -135,17 +135,17 @@ final class Router
         if (!$mountInfo) {
             $mount = 'core';
             $mountInfo = $this->map['__mount']['core'] ?? null;
-            if (!$mountInfo) return new Result(404, '');
+            if (!$mountInfo) return null;
             $segments = $path === '' ? ['index'] : explode('/', $path);
         }
 
         $match = $this->resolveRoute($mount, $mountInfo, $segments, $method);
-        if (!$match) return new Result(404, '');
+        if (!$match) return null;
 
         $req['pattern'] = $match['pattern'];
 
         $body = (string) $this->dispatch($match, $ctx, $req);
-        return new Result(200, $body, $match['module']);
+        return new Result($body, $match['module']);
     }
 
     // ---------------------------

@@ -57,7 +57,7 @@ class RouterTest extends TestCase
         return Router::create($this->tmpDir);
     }
 
-    private function routeCapture(Router $router, string $method, string $path): Result
+    private function routeCapture(Router $router, string $method, string $path): ?Result
     {
         $ctx = new Context();
         $req = [
@@ -80,7 +80,6 @@ class RouterTest extends TestCase
         $router = $this->makeRouter();
         $res = $this->routeCapture($router, 'GET', '/');
 
-        $this->assertSame(200, $res->status);
         $this->assertSame('home', $res->body);
     }
 
@@ -90,7 +89,6 @@ class RouterTest extends TestCase
         $router = $this->makeRouter();
         $res = $this->routeCapture($router, 'GET', '/about');
 
-        $this->assertSame(200, $res->status);
         $this->assertSame('about-page', $res->body);
     }
 
@@ -100,7 +98,6 @@ class RouterTest extends TestCase
         $router = $this->makeRouter();
         $res = $this->routeCapture($router, 'GET', '/users');
 
-        $this->assertSame(200, $res->status);
         $this->assertSame('users-list', $res->body);
     }
 
@@ -110,7 +107,7 @@ class RouterTest extends TestCase
         $router = $this->makeRouter();
         $res = $this->routeCapture($router, 'GET', '/nonexistent');
 
-        $this->assertSame(404, $res->status);
+        $this->assertNull($res);
     }
 
     // ----------------------------------------------------------------
@@ -153,7 +150,6 @@ class RouterTest extends TestCase
         $router = $this->makeRouter();
         $res = $this->routeCapture($router, 'GET', '/users/42');
 
-        $this->assertSame(200, $res->status);
         $this->assertSame('user-42', $res->body);
     }
 
@@ -163,7 +159,6 @@ class RouterTest extends TestCase
         $router = $this->makeRouter();
         $res = $this->routeCapture($router, 'GET', '/users/99/settings');
 
-        $this->assertSame(200, $res->status);
         $this->assertSame('settings-99', $res->body);
     }
 
@@ -177,7 +172,6 @@ class RouterTest extends TestCase
         $router = $this->makeRouter();
         $res = $this->routeCapture($router, 'GET', '/docs/a/b/c');
 
-        $this->assertSame(200, $res->status);
         $this->assertSame('a/b/c', $res->body);
     }
 
@@ -187,7 +181,6 @@ class RouterTest extends TestCase
         $router = $this->makeRouter();
         $res = $this->routeCapture($router, 'GET', '/files/x/y');
 
-        $this->assertSame(200, $res->status);
         $this->assertSame('x,y', $res->body);
     }
 
@@ -199,12 +192,10 @@ class RouterTest extends TestCase
 
         // Matches the directory root (no trailing segments)
         $root = $this->routeCapture($router, 'GET', '/pages');
-        $this->assertSame(200, $root->status);
         $this->assertSame('root', $root->body);
 
         // Matches with trailing segments
         $deep = $this->routeCapture($router, 'GET', '/pages/foo/bar');
-        $this->assertSame(200, $deep->status);
         $this->assertSame('foo/bar', $deep->body);
     }
 
@@ -216,12 +207,10 @@ class RouterTest extends TestCase
 
         // Bare path — zero segments
         $bare = $this->routeCapture($router, 'GET', '/search');
-        $this->assertSame(200, $bare->status);
         $this->assertSame('empty', $bare->body);
 
         // With segments
         $deep = $this->routeCapture($router, 'GET', '/search/php/router');
-        $this->assertSame(200, $deep->status);
         $this->assertSame('php+router', $deep->body);
     }
 
@@ -241,7 +230,7 @@ class RouterTest extends TestCase
         $blogger = $this->routeCapture($router, 'GET', '/blogger');
 
         $this->assertSame('core-home', $core->body);
-        $this->assertSame(404, $blog->status);
+        $this->assertNull($blog);
         $this->assertSame('blog-home', $blogger->body);
     }
 
@@ -251,7 +240,6 @@ class RouterTest extends TestCase
         $router = $this->makeRouter();
         $res = $this->routeCapture($router, 'GET', '/blog/hello-world');
 
-        $this->assertSame(200, $res->status);
         $this->assertSame('post-hello-world', $res->body);
     }
 
@@ -266,7 +254,6 @@ class RouterTest extends TestCase
         $router = $this->makeRouter();
         $res = $this->routeCapture($router, 'GET', '/');
 
-        $this->assertSame(200, $res->status);
         $this->assertSame('MW[ok]', $res->body);
     }
 
@@ -278,7 +265,6 @@ class RouterTest extends TestCase
         $router = $this->makeRouter();
         $res = $this->routeCapture($router, 'GET', '/blog');
 
-        $this->assertSame(200, $res->status);
         $this->assertSame('CORE[blog]', $res->body);
     }
 
@@ -291,8 +277,6 @@ class RouterTest extends TestCase
         $router = $this->makeRouter();
         $res = $this->routeCapture($router, 'GET', '/api');
 
-        $this->assertSame(200, $res->status);
-        // core MW wraps outer, api MW wraps inner
         $this->assertSame('C[A[data]]', $res->body);
     }
 
@@ -303,15 +287,13 @@ class RouterTest extends TestCase
     public function testContextWrapJson(): void
     {
         $this->putFile('core/routes/data.php', '<?php return ["json" => ["ok" => true]];');
-        $ctx = new Context([
-            'json' => fn(mixed $data) => json_encode($data),
-        ]);
+        $ctx = new Context();
+        $ctx->wrap['json'] = fn(mixed $data) => json_encode($data);
         $router = $this->makeRouter();
         $req = ['method' => 'GET', 'path' => 'data', 'query' => [], 'input' => []];
 
         $result = $router->route($ctx, $req);
 
-        $this->assertSame(200, $result->status);
         $this->assertSame('{"ok":true}', $result->body);
     }
 
@@ -401,7 +383,7 @@ class RouterTest extends TestCase
 
         // New route is invisible because the stale cache doesn't list it
         $res2 = $this->routeCapture($router2, 'GET', '/new-page');
-        $this->assertSame(404, $res2->status);
+        $this->assertNull($res2);
     }
 
     // ----------------------------------------------------------------
@@ -429,7 +411,6 @@ class RouterTest extends TestCase
         // /foo isn't a module — it's just a core route at core/routes/foo/
         $res = $this->routeCapture($router, 'GET', '/foo');
 
-        $this->assertSame(200, $res->status);
         $this->assertSame('foo-core', $res->body);
     }
 
@@ -442,7 +423,6 @@ class RouterTest extends TestCase
         $router = $this->makeRouter();
 
         $res = $this->routeCapture($router, 'GET', '/api');
-        $this->assertSame(200, $res->status);
         $this->assertSame('module-api', $res->body);
     }
 

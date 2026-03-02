@@ -27,7 +27,7 @@ $ctx = new Context();
 
 $result = $router->route($ctx);
 
-if ($result->ok()) {
+if ($result) {
     echo $result->body;
 } else {
     http_response_code(404);
