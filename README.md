@@ -124,9 +124,6 @@ class AppContext extends \phorq\Context
 }
 ```
 
-Middleware and route handlers receive your subclass — with full access to
-your services *and* the inherited `$wrap` array.
-
 Route handlers select a wrapper by returning a single-key array where the key matches a wrap name:
 
 ```php
