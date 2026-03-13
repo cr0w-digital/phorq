@@ -49,7 +49,7 @@ $router = Router::create(
 $result = $router->route();
 
 if ($result) {
-    echo (string) $result->value;
+    echo $result->value;
 } else {
     http_response_code(404);
     echo '404 Not Found';
