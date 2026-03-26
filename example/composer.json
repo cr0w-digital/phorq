@@ -1,0 +1,30 @@
+{
+    "name": "cr0w/phorq-example",
+    "description": "phorq example app",
+    "type": "project",
+    "license": "MIT",
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "require": {
+        "php": ">=8.2",
+        "cr0w/phorq": "*",
+        "cr0w/phml": "*"
+    },
+    "require-dev": {
+        "spiral/roadrunner-http": "^3.0",
+        "nyholm/psr7": "^1.0"
+    },
+    "repositories": [
+        { "type": "path", "url": "../" }
+    ],
+    "scripts": {
+        "start":      "php -S localhost:8080 public/index.php",
+        "start:frank": "frankenphp php-server",
+        "start:swoole": "php runtimes/swoole/server.php",
+        "start:rr":   "rr serve -c runtimes/roadrunner/.rr.yaml"
+    },
+    "config": {
+        "sort-packages": true,
+        "process-timeout": 0
+    }
+}

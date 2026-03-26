@@ -27,34 +27,14 @@ namespace phorq;
  */
 final class Router
 {
-    /**
-     * Map format (cached as PHP file returning array):
-     * [
-     *   '__mount' => [
-     *     'mountName' => ['name' => 'mod', 'routes' => '/path/to/routes', 'root' => '/path/to/moduleRoot', 'mw' => '/path/to/middleware.php'|null],
-     *     ...
-     *   ],
-     *   '/path/to/routes/dir' => ['dirs' => ['users','[id]','[...rest]','[[...rest]]'], 'files' => ['index.php','[id].php',...]],
-     *   '/path/to/routes/dir/users' => [...],
-     * ]
-     */
     private array $map = [];
+    private array $middleware = [];
 
-    /**
-     * @param string      $modulesDir Absolute path to the modules directory.
-     * @param string|null $cacheFile  Absolute path to the cache file, or null to disable caching.
-     */
     public function __construct(
         private string $modulesDir,
         private ?string $cacheFile,
     ) {}
 
-    /**
-     * Factory: build a Router, scanning (or loading from cache) the route map.
-     *
-     * @param string      $modulesDir Absolute path to the modules directory.
-     * @param string|null $cacheFile  Path to the cache file, or null to disable caching.
-     */
     public static function create(string $modulesDir, ?string $cacheFile = null): self
     {
         $r = new self(rtrim($modulesDir, '/'), $cacheFile);
@@ -62,21 +42,23 @@ final class Router
         return $r;
     }
 
-    /**
-     * Resolve a module-relative file with core fallback (layout.php, middleware helpers, etc).
-     * If no extension is provided, .php is appended.
-     *
-     * @param string $name   File name to resolve (e.g. 'layout' or 'helpers.php').
-     * @param string $module Module to search first before falling back to core.
-     */
+    public function use(callable $middleware): static
+    {
+        $this->middleware[] = $middleware;
+        return $this;
+    }
+
     public function resolve(string $name, string $module = 'core'): ?string
     {
         if (!str_contains($name, '.')) $name .= '.php';
 
-        $p = "{$this->modulesDir}/{$module}/{$name}";
+        // Resolve mount alias to actual module directory name
+        $moduleDir = $this->map['__mount'][$module]['name'] ?? $module;
+
+        $p = "{$this->modulesDir}/{$moduleDir}/{$name}";
         if (is_file($p)) return $p;
 
-        if ($module !== 'core') {
+        if ($moduleDir !== 'core') {
             $p = "{$this->modulesDir}/core/{$name}";
             if (is_file($p)) return $p;
         }
@@ -86,16 +68,7 @@ final class Router
 
     // ── Routing ──────────────────────────────────────────────
 
-    /**
-     * Main entrypoint. Matches the request against the route map and dispatches
-     * it through the middleware stack.
-     *
-     * Returns a Result on success, or null on 404.
-     *
-     * @param mixed        $ctx Optional application context threaded through middleware and route files.
-     * @param Request|null $req Pre-built request, or null to build from superglobals.
-     */
-    public function route(mixed $ctx = null, ?Request $req = null): ?Result
+    public function route(mixed $ctx = null, ?Request $req = null): Result
     {
         $req  = $req ?? Request::fromGlobals();
         $path = $req->path;
@@ -110,61 +83,91 @@ final class Router
 
         $mountInfo = $this->map['__mount'][$mount] ?? null;
 
-        // Module mount always wins — only fall back to core when no module matches.
         if (!$mountInfo) {
             $mount     = 'core';
             $mountInfo = $this->map['__mount']['core'] ?? null;
-            if (!$mountInfo) return null;
+            if (!$mountInfo) return Result::notFound();
             $segments = $path === '' ? ['index'] : explode('/', $path);
         }
 
         $match = $this->resolveRoute($mount, $mountInfo, $segments);
-        if (!$match) return null;
+        if (!$match) return Result::notFound();
 
-        // Bind pattern and module onto the request before dispatch so that
-        // middleware and route files can read $req->pattern and $req->module.
-        $req   = $req->withMatch($match['pattern'], $match['module']);
-        $value = $this->dispatch($match, $ctx, $req);
+        $req = $req->withMatch($match['pattern'], $match['module']);
 
-        return new Result($value, $match['module']);
+        // Reset directives for this request
+        directives()->reset();
+
+        $directives = $this->runMiddleware($match, $ctx, $req);
+
+        return new Result(
+            module:     $match['module'],
+            directives: $directives,
+        );
     }
 
-    // ── Dispatch ─────────────────────────────────────────────
+    // ── Middleware chain ──────────────────────────────────────
 
-    /**
-     * Execute the matched route file through the middleware stack.
-     *
-     * Route files receive:
-     *   $req    — the Request object (with pattern and module already set)
-     *   $ctx    — the application context (whatever the caller passed in, may be null)
-     *   $router — this Router instance
-     *   + one variable per URL param (e.g. $id, $rest)
-     *
-     * Returns the raw value from the route file — no casting or wrapping.
-     */
-    private function dispatch(array $match, mixed $ctx, Request $req): mixed
+    private function runMiddleware(array $match, mixed $ctx, Request $req): array
     {
         $routeFile   = $match['file'];
-        $middlewares = $match['mw'];
+        $middlewares = [...$this->middleware, ...$match['mw']];
         $params      = $match['params'];
 
-        $handler = function () use ($routeFile, $params, $req, $ctx) {
+        $currentModule = $match['module'] ?? 'core';
+
+        $self = $this;
+
+        $handler = function () use ($routeFile, $params, $req, $ctx, $self, $currentModule): array {
             extract($params, EXTR_OVERWRITE);
+
+            $router  = $self;
+
+            // Module-aware resolve — defaults to the current route's module
+            $resolve = fn(string $name, ?string $module = null) =>
+                $self->resolve($name, $module ?? $currentModule);
 
             ob_start();
             $ret = require $routeFile;
             $buf = ob_get_clean();
-            return $buf !== '' ? $buf : $ret;
+
+            // Route returned a directive list (e.g. return html(...), return redirect(...))
+            // Already swept — use directly, merge any stack modifiers (title, trigger etc.)
+            if (is_array($ret) && is_directive_list($ret)) {
+                $modifiers = directives()->sweep(); // pick up any modifier directives
+                return array_merge($modifiers, $ret);
+            }
+
+            // Captured echo output — implicit html directive
+            if ($buf !== '') {
+                directives()->push('html', ['content' => $buf, 'code' => 200]);
+            }
+            // Returned string or phml node — implicit html directive
+            elseif ($ret !== null && $ret !== 1) {
+                directives()->push('html', ['content' => $ret, 'code' => 200]);
+            }
+
+            return directives()->sweep();
         };
 
-        foreach (array_reverse($middlewares) as $mwFile) {
+        foreach (array_reverse($middlewares) as $mw) {
             $prev    = $handler;
-            $handler = function () use ($mwFile, $prev, $req, $ctx) {
-                $mw = require $mwFile;
-                if (!is_callable($mw)) {
-                    throw new \RuntimeException("Invalid middleware: {$mwFile}");
+            $handler = function () use ($mw, $prev, $req, $ctx): array {
+                $resolved = is_callable($mw) ? $mw : require $mw;
+                if (!is_callable($resolved)) {
+                    throw new \RuntimeException("Invalid middleware: {$mw}");
                 }
-                return $mw($prev, $req, $ctx, $this);
+
+                $directives = $resolved($prev, $req, $ctx, $this);
+
+                if (!is_array($directives)) {
+                    throw new \RuntimeException(
+                        "Middleware must return an array of directives. Got " . get_debug_type($directives) . ". " .
+                        "Call \$next() and return its result, or return [] to short-circuit."
+                    );
+                }
+
+                return $directives;
             };
         }
 
@@ -173,10 +176,6 @@ final class Router
 
     // ── Route resolution ─────────────────────────────────────
 
-    /**
-     * Walk the segment list against the route map, matching static dirs, dynamic
-     * dirs, and catch-all dirs/files. Returns a match array or null on 404.
-     */
     private function resolveRoute(string $mount, array $mountInfo, array $segments): ?array
     {
         $routesDir = $mountInfo['routes'];
@@ -194,7 +193,6 @@ final class Router
             $entry = $this->map[$dir] ?? null;
             if (!$entry) return null;
 
-            // Runtime ambiguity detection
             $candidates = [];
             if (in_array($seg, $entry['dirs'], true)) {
                 $candidates[] = ['type' => 'static', 'dir' => $seg];
@@ -247,10 +245,6 @@ final class Router
         return $this->resolveIndex($mount, $routesDir, $dir, $params, $mw);
     }
 
-    /**
-     * Try to match index.php in the given directory.
-     * Falls back to optional catch-all subdirectory if absent.
-     */
     private function resolveIndex(string $mount, string $routesDir, string $dir, array $params, array $mw): ?array
     {
         $entry = $this->map[$dir] ?? null;
@@ -260,7 +254,6 @@ final class Router
             return $this->finalMatch($mount, $routesDir, "{$dir}/index.php", $params, $mw);
         }
 
-        // No index file — check for optional catch-all file or subdirectory
         foreach ($entry['files'] as $f) {
             if (preg_match('/^\[\[\.\.\.(\w+)\]\]\.php$/', $f, $m)) {
                 $params[$m[1]] = [];
@@ -276,12 +269,6 @@ final class Router
         return null;
     }
 
-    /**
-     * File match precedence:
-     *   1. segment.php       — exact static
-     *   2. [param].php       — single dynamic
-     *   3. [...rest].php / [[...rest]].php  — catch-all
-     */
     private function pickFile(string $dir, array $segments, array $files, array &$params): ?string
     {
         $seg = $segments[0] ?? null;
@@ -311,9 +298,6 @@ final class Router
         return null;
     }
 
-    /**
-     * Build the final match array from a resolved file path, deriving the route pattern.
-     */
     private function finalMatch(string $mount, string $routesDir, string $file, array $params, array $mw): array
     {
         $rel = substr($file, strlen($routesDir));
@@ -334,10 +318,6 @@ final class Router
 
     // ── Map building + caching ───────────────────────────────
 
-    /**
-     * Load the route map from cache, or scan the modules directory and build it
-     * fresh. Writes the cache file when caching is enabled.
-     */
     private function loadMap(): array
     {
         if ($this->cacheFile !== null && is_file($this->cacheFile)) {
@@ -383,10 +363,6 @@ final class Router
         return $map;
     }
 
-    /**
-     * Recursively scan a routes directory, populating the map with dirs and
-     * files at each level. Detects ambiguous route shapes at scan time.
-     */
     private function scanRoutes(string $dir, array &$map): void
     {
         $dirs  = [];
@@ -399,14 +375,13 @@ final class Router
             if (is_dir($p)) {
                 $dirs[] = $item;
                 $this->scanRoutes($p, $map);
-            } elseif (str_ends_with($item, '.php')) {
+            } elseif (str_ends_with($item, '.php') || str_ends_with($item, '.md')) {
                 $files[] = $item;
             }
         }
 
         usort($dirs, fn($a, $b) => $this->dirRank($a) <=> $this->dirRank($b));
 
-        // Static ambiguity detection — directories
         $shapes = [];
         foreach ($dirs as $d) {
             $shape = match (true) {
@@ -425,7 +400,6 @@ final class Router
 
         $map[$dir] = ['dirs' => $dirs, 'files' => $files];
 
-        // Static ambiguity detection — dynamic route files
         $fileShapes = [];
         foreach ($files as $f) {
             $shape = match (1) {
@@ -444,9 +418,6 @@ final class Router
         }
     }
 
-    /**
-     * Sort rank for directories: static (0) < dynamic (1) < catch-all (2) < optional catch-all (3).
-     */
     private function dirRank(string $d): int
     {
         return match (true) {
@@ -457,40 +428,32 @@ final class Router
         };
     }
 
-    // ── Pattern helpers ──────────────────────────────────────
-
-    /** True for a single dynamic segment like [id]. */
     private function isDynDir(string $d): bool
     {
         return str_starts_with($d, '[') && str_ends_with($d, ']')
             && !$this->isCatchDir($d) && !$this->isOptCatchDir($d);
     }
 
-    /** True for a catch-all segment like [...rest]. */
     private function isCatchDir(string $d): bool
     {
         return str_starts_with($d, '[...') && str_ends_with($d, ']');
     }
 
-    /** True for an optional catch-all segment like [[...rest]]. */
     private function isOptCatchDir(string $d): bool
     {
         return str_starts_with($d, '[[...') && str_ends_with($d, ']]');
     }
 
-    /** Extract the parameter name from a dynamic dir: [id] → id. */
     private function dynName(string $d): string
     {
         return trim($d, '[]');
     }
 
-    /** Extract the parameter name from a catch-all dir: [...rest] → rest, [[...rest]] → rest. */
     private function catchName(string $d): string
     {
         return ltrim(trim($d, '[]'), '.');
     }
 
-    /** Return the first element of $xs matching $pred, or null. */
     private function first(array $xs, callable $pred): ?string
     {
         foreach ($xs as $x) if ($pred($x)) return $x;

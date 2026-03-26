@@ -9,22 +9,9 @@ namespace phorq;
  *
  * Constructed once per request and passed through the middleware stack into
  * every route file. All properties are read-only after construction.
- *
- * Usage in route files:
- *
- *   $req->isPost()
- *   $req->isHtmx()
- *   $req->string('email')
- *   $req->int('page', 1)
- *   $req->input('payload')
- *   $req->query('sort', 'asc')
- *   $req->module
- *   $req->pattern
  */
 final class Request
 {
-    // ── Properties ───────────────────────────────────────────
-
     /** HTTP method, uppercased — e.g. 'GET', 'POST'. */
     public readonly string $method;
 
@@ -46,18 +33,9 @@ final class Request
     /** Matched module name — e.g. 'account'. Set by Router before dispatch. */
     public readonly ?string $module;
 
-    // ── Constructor ──────────────────────────────────────────
+    /** Matched route file path. Set by Router before dispatch. */
+    public readonly ?string $file;
 
-    /**
-     * All parameters accept mixed input and are normalised on construction:
-     *
-     *   $method  → uppercased string, defaults to 'GET'
-     *   $path    → trimmed string, no leading or trailing slashes
-     *   $query   → array, objects cast to array, anything else becomes []
-     *   $input   → array, same coercion as $query
-     *   $headers → array, keys lowercased and underscores replaced with hyphens;
-     *              array values are reduced to their first element
-     */
     public function __construct(
         mixed $method   = 'GET',
         mixed $path     = '',
@@ -66,11 +44,13 @@ final class Request
         mixed $headers  = [],
         ?string $pattern = null,
         ?string $module  = null,
+        ?string $file    = null,
     ) {
         $this->method  = strtoupper((string) $method ?: 'GET');
         $this->path    = trim((string) $path, '/');
         $this->pattern = $pattern;
         $this->module  = $module;
+        $this->file    = $file;
 
         $toArray = static fn (mixed $v): array =>
             is_array($v) ? $v : (is_object($v) ? (array) $v : []);
@@ -88,13 +68,6 @@ final class Request
 
     // ── Factory ──────────────────────────────────────────────
 
-    /**
-     * Build a Request from PHP superglobals.
-     *
-     * POST bodies are read from $_POST when populated, otherwise the raw
-     * php://input stream is decoded as JSON. GET requests produce no input.
-     * Headers are extracted from HTTP_* keys in $_SERVER.
-     */
     public static function fromGlobals(): self
     {
         $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
@@ -116,10 +89,6 @@ final class Request
         return new self($method, $path, $_GET, $input, $headers);
     }
 
-    /**
-     * Return a new Request with the matched pattern and module set.
-     * Called by Router immediately after route resolution, before dispatch.
-     */
     public function withMatch(string $pattern, string $module): self
     {
         return new self(
@@ -143,28 +112,67 @@ final class Request
 
     // ── Request type ─────────────────────────────────────────
 
-    /**
-     * True when the request carries or expects JSON.
-     *
-     * Checks both Content-Type (body is JSON) and Accept (response should be
-     * JSON) so it covers both POST/PUT payloads and GET API requests.
-     */
     public function isJson(): bool
     {
         return str_contains($this->header('Content-Type', ''), 'application/json')
             || str_contains($this->header('Accept', ''), 'application/json');
     }
 
-    /**
-     * True when the request arrived over HTTPS.
-     *
-     * Checks X-Forwarded-Proto first for reverse proxy and FrankenPHP setups,
-     * then falls back to the HTTPS server variable.
-     */
     public function isSecure(): bool
     {
         return $this->header('X-Forwarded-Proto') === 'https'
             || ($_SERVER['HTTPS'] ?? '') === 'on';
+    }
+
+    // ── Input ────────────────────────────────────────────────
+
+    public function input(string $key, mixed $default = null): mixed
+    {
+        return $this->input[$key] ?? $default;
+    }
+
+    public function query(string $key, mixed $default = null): mixed
+    {
+        return $this->query[$key] ?? $default;
+    }
+
+    public function string(string $key, string $default = ''): string
+    {
+        return trim((string) ($this->input[$key] ?? $this->query[$key] ?? $default));
+    }
+
+    public function int(string $key, int $default = 0): int
+    {
+        return (int) ($this->input[$key] ?? $this->query[$key] ?? $default);
+    }
+
+    public function float(string $key, float $default = 0.0): float
+    {
+        return (float) ($this->input[$key] ?? $this->query[$key] ?? $default);
+    }
+
+    public function bool(string $key, bool $default = false): bool
+    {
+        $val = $this->input[$key] ?? $this->query[$key] ?? null;
+        if ($val === null) return $default;
+        return filter_var($val, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? $default;
+    }
+
+    public function has(string $key): bool
+    {
+        return isset($this->input[$key]) || isset($this->query[$key]);
+    }
+
+    public function hasInput(string $key): bool
+    {
+        return isset($this->input[$key]);
+    }
+
+    // ── Headers ──────────────────────────────────────────────
+
+    public function header(string $name, ?string $default = null): ?string
+    {
+        return $this->headers[strtolower($name)] ?? $default;
     }
 
     // ── HTMX ─────────────────────────────────────────────────
@@ -175,7 +183,7 @@ final class Request
         return isset($this->headers['hx-request']);
     }
 
-    /** True when the HTMX request was triggered by a boosted element. */
+    /** True when the request was triggered by a boosted element. */
     public function isBoosted(): bool
     {
         return isset($this->headers['hx-boosted']);
@@ -199,82 +207,47 @@ final class Request
         return $this->headers['hx-trigger-name'] ?? null;
     }
 
-    // ── Input ────────────────────────────────────────────────
+    // ── Datastar ─────────────────────────────────────────────
 
-    /**
-     * Retrieve a raw value from the request body.
-     * Returns $default when the key is absent.
-     */
-    public function input(string $key, mixed $default = null): mixed
+    /** True when the request was initiated by Datastar. */
+    public function isDatastar(): bool
     {
-        return $this->input[$key] ?? $default;
+        return isset($this->headers['datastar-request']);
     }
 
     /**
-     * Retrieve a raw value from the query string.
-     * Returns $default when the key is absent.
-     */
-    public function query(string $key, mixed $default = null): mixed
-    {
-        return $this->query[$key] ?? $default;
-    }
-
-    /**
-     * Retrieve a trimmed string from input or query string.
-     * Input takes precedence over query when both are present.
-     */
-    public function string(string $key, string $default = ''): string
-    {
-        return trim((string) ($this->input[$key] ?? $this->query[$key] ?? $default));
-    }
-
-    /** Retrieve an integer from input or query string. */
-    public function int(string $key, int $default = 0): int
-    {
-        return (int) ($this->input[$key] ?? $this->query[$key] ?? $default);
-    }
-
-    /** Retrieve a float from input or query string. */
-    public function float(string $key, float $default = 0.0): float
-    {
-        return (float) ($this->input[$key] ?? $this->query[$key] ?? $default);
-    }
-
-    /**
-     * Retrieve a boolean from input or query string.
+     * All signals sent by the Datastar frontend.
      *
-     * Uses filter_var to handle 'true', 'false', '1', '0', 'yes', 'no', etc.
+     * GET requests: signals arrive as ?datastar={"count":42}
+     * All other methods: signals arrive as the JSON body directly — {"count":42}
      */
-    public function bool(string $key, bool $default = false): bool
+    public function signals(): array
     {
-        $val = $this->input[$key] ?? $this->query[$key] ?? null;
-        if ($val === null) return $default;
-        return filter_var($val, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? $default;
+        if ($this->isGet()) {
+            $raw = $this->query['datastar'] ?? null;
+            return $raw ? (json_decode($raw, true) ?? []) : [];
+        }
+
+        // POST/PUT/PATCH/DELETE — signals are the entire JSON body
+        return $this->input;
     }
 
     /**
-     * True when the key is present in either input or query string.
-     * Use hasInput() to check only the request body.
+     * Read a single signal value with an optional default.
+     * Supports dot notation for nested signals: signal('user.name')
      */
-    public function has(string $key): bool
+    public function signal(string $key, mixed $default = null): mixed
     {
-        return isset($this->input[$key]) || isset($this->query[$key]);
-    }
+        $signals = $this->signals();
+        $parts   = explode('.', $key);
 
-    /** True when the key is present in the request body. */
-    public function hasInput(string $key): bool
-    {
-        return isset($this->input[$key]);
-    }
+        foreach ($parts as $part) {
+            if (!is_array($signals) || !array_key_exists($part, $signals)) {
+                return $default;
+            }
+            $signals = $signals[$part];
+        }
 
-    // ── Headers ──────────────────────────────────────────────
-
-    /**
-     * Retrieve a header value by name (case-insensitive).
-     * Returns $default when the header is absent.
-     */
-    public function header(string $name, ?string $default = null): ?string
-    {
-        return $this->headers[strtolower($name)] ?? $default;
+        return $signals;
     }
 }

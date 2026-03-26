@@ -1,31 +1,14 @@
 <?php
-/**
- * phorq example — front controller
- *
- * Try it:
- *   php -S localhost:8080 example/public/index.php
- *
- * Then visit:
- *   /              -> core index
- *   /about         -> core about page
- *   /users         -> user list
- *   /users/42      -> user #42
- *   /docs/a/b/c    -> catch-all docs
- *   /blog          -> blog index (separate module)
- *   /blog/my-post  -> blog post with slug param
- */
 
-require __DIR__ . '/../../vendor/autoload.php';
-
-use phorq\Router;
-
-$router = Router::create(__DIR__ . '/../modules');
-$result = $router->route();
-
-if (!$result) {
-    http_response_code(404);
-    echo '<h1>404 — Not Found</h1>';
-    return;
+// Serve static files directly when using the built-in server.
+if (php_sapi_name() === 'cli-server') {
+    $file = __DIR__ . parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+    if (is_file($file)) return false;
 }
 
-echo $result->value;
+// FPM / FrankenPHP entry point.
+// Run: php -S localhost:8080 public/index.php
+//      frankenphp php-server
+//      docker compose up
+require __DIR__ . '/../boot.php';
+\phorq\run($router, $ctx);

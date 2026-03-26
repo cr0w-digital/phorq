@@ -1,0 +1,12 @@
+version: "3"
+
+server:
+  command: "php examples/roadrunner/worker.php"
+
+http:
+  address: "0.0.0.0:8080"
+  pool:
+    num_workers: 4
+
+logs:
+  level: info

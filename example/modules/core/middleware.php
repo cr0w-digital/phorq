@@ -1,12 +1,8 @@
 <?php
 
-use phorq\{Request, Router};
+declare(strict_types=1);
 
-/**
- * Core middleware — runs on every request.
- * Adds an X-Powered-By header.
- */
-return function (callable $next, Request $req, mixed $ctx, Router $router) {
-    header('X-Powered-By: phorq');
+return function (callable $next, \phorq\Request $req, mixed $ctx): array {
+    // Good place for auth checks, logging etc.
     return $next();
 };

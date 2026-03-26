@@ -1,0 +1,40 @@
+services:
+
+  # ── PHP / FrankenPHP ──────────────────────────────────────
+  php:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app
+    environment:
+      PUBLISHER: ${PUBLISHER:-none}   # redis | mercure | none
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MERCURE_URL: http://mercure/.well-known/mercure
+      MERCURE_SECRET: ${MERCURE_SECRET:-dev-secret}
+    depends_on:
+      - redis
+      - mercure
+
+  # ── Redis ─────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  # ── Mercure ───────────────────────────────────────────────
+  mercure:
+    image: dunglas/mercure
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+    environment:
+      SERVER_NAME: ':80'
+      MERCURE_PUBLISHER_JWT_KEY: ${MERCURE_SECRET:-dev-secret}
+      MERCURE_SUBSCRIBER_JWT_KEY: ${MERCURE_SECRET:-dev-secret}
+      MERCURE_EXTRA_DIRECTIVES: |
+        cors_origins "*"
+        anonymous

@@ -3,7 +3,7 @@
     "description": "File-based routing for PHP",
     "type": "library",
     "license": "MIT",
-    "keywords": ["router", "file-based", "php", "middleware", "modules"],
+    "keywords": ["router", "file-based", "datastar", "htmx", "sse", "hypermedia"],
     "authors": [
         {
             "name": "Denny Shimkoski",
@@ -14,16 +14,16 @@
         "php": ">=8.2"
     },
     "require-dev": {
-        "phpunit/phpunit": "^10.0|^11.0"
+        "phpunit/phpunit": "^11.0"
     },
     "autoload": {
+        "files": [
+            "src/functions/datastar.php",
+            "src/functions/global.php",
+            "src/functions/phorq.php"
+        ],
         "psr-4": {
             "phorq\\": "src/"
-        }
-    },
-    "autoload-dev": {
-        "psr-4": {
-            "phorq\\Tests\\": "tests/"
         }
     },
     "scripts": {
